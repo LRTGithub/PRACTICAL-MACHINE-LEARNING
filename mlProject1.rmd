@@ -1,0 +1,363 @@
+---
+title: "STATISCAL PREDICTION MODELLING APPLIED TO WORKOUT QUALITY."
+author: "LR"
+date: "October 4, 2021"
+output: 
+        html_document: 
+          keep_md: yes
+          toc: yes
+          fig_caption: yes
+          number_sections: yes
+          fig_width: 5
+---
+OVERVIEW / SYNOPSIS.-
+=====================
+The goal of your project is to predict the manner in which participants of the study conducted a specific work-out exercise. 
+This paper describes the process in which a statistical model was created and applied to predicting the manner under which a group of individuals did a specific work-out (variable name "classe" ). I used a stacked model approach of 3 models: Linear Discriminant Analysis (LDA), Random Forest (RF), General Boosted Regression Modelling (GBM).
+These three models are stacked into 1 which then predicts on out-of-sample data --a quiz dataset of 20 records with variables measures but unknown "classe"--.
+The 3 models have accuracy and computational times of: 71%/10secs, 99%/6 minutes, 98%/2minutes. The final stacked model predicts the output of the quiz (in ml-testing.csv) with 100% accuracy. I later discovered that the GBM alone is able to predict the same outcome for the quiz with 100%. While it is not possible to know this a priori --the quiz needs to be solved to 100% accuracy first to know what the right answers are-- GBM is the model that offers the most acceptable trade-off between accuracy and computational time.
+
+CRITERIA CHECKLIST: HELP YOUR GRADERS.-
+========================================
+This section addresses the review criteria in detail. THIS DOCUMENT COMPALIES WITH ALL CRITERIA.
+
+[ YES ]	The report describes a machine learning algorithm to predict activity quality from activity monitors.
+[ YES ]	The report is 2,000 words or less. THE WORD COUNT 1,688.
+[ YES ]	The number of figures in the document 5 or less.
+[ YES ]	The report explains how the model was built.
+[ YES ]	The report explains how cross-validation was used to estimate the out of sample error rate.
+[ YES ]	The report lists the key decisions made during the analysis, and explains why these decisions were made.
+[ YES ]	The report reviews the accuracy of the selected machine learning algorithm in predicting the 20 unknown test cases.
+[ YES ]	The submission includes a github repository, and a link to the repository as part of the Coursera submission.
+[ YES ]	The submission includes a compiled HTML document, the output .md markdown file, and any graphics required to correctly view them within the markdown file on github.
+[ YES ]	If a github pages branch is provided, is the HTML file accessible at https://username.github.io/reponame. 
+ALL CRITERIA HAS BEEN MET.
+
+BRIEF DESCRIPTION OF THE EXPERIMENT AND VARIABLE CLASS.-
+========================================================
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+DATA COLLECTION AND METHODOLOGY.-
+=================================
+Data collection and experiment specifics can be found in the following link:
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. 
+
+RESOURCES AND CREDIT TO MENTORS AND PEERS.-
+===========================================
+The lectures and prior weeks' course quizes were the main source of reference to complete this project. The week 4 forum, the comments and hints from mentor Len Greski offer invaluable must-read help to get a quick start, avoid pitfalls, and improve computational efficiency.
+
+APPROACH TO SOLVING THE PROBLEM.-
+=================================
+The dataset contains 160 variables. I will begin by reviewing, cleaning, completing the dataset, and selecting a group of relevant variables. I will create train, test, and validation sets and fit 3 models: lda, rf, and gbm. Finally, I will stack the 3 models (fitted with rf).
+The last step is done to predict on the quiz set, compute the out-of-sample error, answer the quiz, and present conclussions.
+
+CROSS VALIDATION AND OUT-OF-SAMPLE ERROR.-
+==========================================
+After we build and apply a model to a dataset, we need to have a measure of how well the model is predicting vis-a-vis the observed data. I will use k-fold cross-validation method applied through the trControl parameter (available in the train function of the caret package). The k-fold cross validation process can be summarized as follows:
+1.- The dataset is divided into k groups of approximately equal size. One group is left out and a model is fit on,
+2.- on the other k-1 groups. The mean square error (MSE) of this iteration is calculated on the group that was left out.
+This process is repeated k times choosing a different group to be left out each time. The overall MSE is the average of the k MSEs.
+
+```{r,  paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+library( caret )
+library( gbm )
+library( parallel ) # for the implementation of parallel processing.
+library( doParallel )
+cluster <- makeCluster( detectCores() - 1 ) # convention to leave 1 core for OS
+registerDoParallel( cluster )
+
+# LOAD DATA.
+OriginalDF <- read.csv( "pml-training.csv")
+
+```
+EXPLORATORY DATA ANALYSIS AND DATA CLEANSING.-
+==============================================
+The dataset contains:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+readings <- dim( OriginalDF )[1]
+readings
+```
+readings and 
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+variables <<- as.numeric( dim( OriginalDF )[2] )
+variables
+```
+variables. 
+
+INTUITION FIRST.-
+=================
+the name of the person, time stamp, new window, numwindow, and more generally the first 7 variables are unlikely to have any impact on the quality of the exercise. 
+I will begin by reviewing, cleaning, and completing the dataset, and eventually select a group of relevant variables to build the model. I will review all variables first and flag those with a large number of missing data ( empty "", or NA):
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+exclude <- c(1:7) # variables to exclude.
+fix <- c( ) # variables to fix/complete.
+for ( var in 1:variables ){ # go through all the variables in the original dataset.
+        # select rows empty, "NA", or NA:
+        MyNAs <- ( OriginalDF[ , var ] == "" | OriginalDF[ ,var ] == "NA" | is.na( OriginalDF[ ,var ] ) )
+        # compute the proportion of such rows in the dataset:
+        propNAs <- sum( MyNAs ) / readings *100
+        if( propNAs > 95 ){ # if more than 95%
+                exclude <<- append( exclude, var ) # flag to exlude this variable from the set.
+        }
+        if( propNAs > 0 & propNAs <= 95 ){ # if there are missing values, but less than 95%, flag to complete the missing values.
+                fix <<- append( fix, var )
+        }
+}
+```
+I will exclude a total of:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+length( exclude )
+names( OriginalDF[, exclude ])
+```
+There are:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+length( fix )
+```
+variables to fix:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+names( OriginalDF[, fix ])
+
+SubsetDF <- OriginalDF[ , -exclude ]
+```
+change the prediction target variable classe to a factor variable:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+SubsetDF$classe <- as.factor( SubsetDF$classe )
+#str( SubsetDF )
+```
+Forecast for the quiz. This is the dataset that needs to be predicted.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+ForecastDF <- read.csv( "pml-testing.csv")
+exclude1 <- append( exclude, 160 ) # last column is id, exclude.
+SubsetForecastDF <- ForecastDF[ , -exclude1 ]
+dim( SubsetForecastDF ) # 20 rows x 52 variables, does not include classe. We need to predict classe.
+dim( SubsetDF ) # 19000 rows x 53 variables, includes classe.
+str( ForecastDF )
+```
+Function to compute Variable Importance.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+VarImportance <- function ( model, type ) {
+                if( type == "RF" ){
+                        MyVarImp <- varImp( model$finalModel, decreasing = TRUE )
+                        MyVarImp <- data.frame( predictors, MyVarImp$Overall )
+                        colnames( MyVarImp )<- c( 'var.id', 'importance')
+                        #print( MyVarImp )# unsorted.
+                        MyVarImp <- MyVarImp[ order( -MyVarImp$importance ), ]
+                } else { # else it is "GBM". LDA does not have a call to VarImportance.
+                        MyVarImp <- relative.influence( model$finalModel, sort. = TRUE )
+                }
+                print( head( MyVarImp, 10 ) ) # sorted descending, print top 10.
+                print( " out of a total of ")
+                print( length( MyVarImp ) )
+                print( " variables.\n")
+}
+```
+SPLIT THE DATA IN 3 GROUPS.- 
+============================
+I will create train, test, and validation sets.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+set.seed( 12345 )
+inBuild <- createDataPartition( y = SubsetDF$classe, p=3/4, list = FALSE )
+buildData <- SubsetDF[ inBuild, ] # biggest set 70% of data.
+validation <- SubsetDF[ -inBuild, ] # take 30% for validation.
+
+inTrain <- createDataPartition( y = buildData$classe, p=3/4, list = FALSE )
+training <- buildData[ inTrain, ] # 70% of buildData, ~49% of total data.
+testing <- buildData[ -inTrain, ] # 30% of buildData, ~21% of total data.
+
+predictors <- colnames( training[ , -length( training ) ] ) # all variables except classe.
+```
+I will build 3 models: LDA, RF, GBM
+Model LDA: Linear Discriminate Analysis
+```{r eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, paged.print=TRUE}
+
+TimerStart <- Sys.time()
+fitControlLDA <- trainControl( method = "cv", number = 5, allowParallel = TRUE ) # k-fold=5 cross-validation.
+modelLDA <- train( classe ~., method = "lda", data = training, trControl = fitControlLDA ) # metric = "Accuracy", prox = TRUE,
+# modelLDA
+predLDA <- predict( modelLDA, newdata = testing ) # predict on the testing set.
+predLDAV <- predict( modelLDA, newdata = validation )
+cm <- confusionMatrix( predLDA , testing$classe )
+cm
+```
+Model LDA predicts classe "A" correctly 82% of time when classe "A" was the right answer (sensitivity). It also predicts correctly a classe different than "A" when "A" is not the right classe (specificity). Sensitivity is lowest for classe "E", and specificity is lowest for classe "C". The overall accuracy of the LDA model is:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+cm$overall["Accuracy"]*100
+```
+71% is not great. We need at least 80% to pass a quiz after all ...:).....
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStop <- Sys.time()
+TimeLDA <- paste("LDA model time => ", TimerStop - TimerStart, attr( TimerStop - TimerStart, "units" ) )
+```
+It takes
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimeLDA
+```
+seconds to run the LDA model. Very reasonable computational performance ! with a meh... accuracy. Not bad. 
+
+Model RF: random forest.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStart <- Sys.time()
+fitControlRF <- trainControl( method = "cv", number = 5, allowParallel = TRUE ) # cv=cross validation, k = 5.
+modelRF <- train( classe ~., method = "rf", data = training , trControl = fitControlRF )
+#print( modelRF$finalModel )
+#modelRF
+predRF <- predict( modelRF, newdata = testing ) # predict on the testing set.
+predRFV <- predict( modelRF, newdata = validation ) # predict on the validation set.
+cm <- confusionMatrix( predRF , testing$classe )
+cm
+# The RF model has high sensitivity (98%-99%) and specificity (99% to 100%) for all classes.
+cm$overall["Accuracy"]*100
+
+VarImportance( modelRF, "RF" ) # top 10 variables based on the importance.
+```
+Variable Importance represents the effect of a variable in both main effects and interactions. The most important 3 variables are roll_belt, pitch_forearm, and yaw_belt.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStop <- Sys.time()
+paste( "RF model time = ", TimerStop - TimerStart, attr( TimerStop - TimerStart,"units" ) )
+```
+accuracy 99%, 6 mins.
+The accuracy of RF is much better than that of the prior LDA model. That accuracy comes at the expense of waiting 6 minutes for it. 
+
+Model GBM: Generalized Boosted Regression Modeling.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStart <- Sys.time()
+fitControlGBM <- trainControl( method = "cv", number = 5, allowParallel = TRUE ) # cross validation k=5.
+modelGBM <- train( classe ~., method = "gbm", data = training, trControl = fitControlGBM )
+#print( modelGBM$finalModel )
+#modelGBM
+predGBM <- predict( modelGBM, newdata = testing ) # predict on the testing set.
+predGBMV <- predict( modelGBM, newdata = validation ) # predict on the validation set.
+cm <- confusionMatrix( predGBM , testing$classe ) # confusionMatrix( prediction, actual )
+cm
+```
+This model has very high sensitivity (94%-98%) and specificity (98% to 99%) for all classes.
+The accuracy of this model is significantly better than the initial LDA model, and very close to that of the RF model.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+cm$overall["Accuracy"]*100
+
+VarImportance( modelGBM, "GBM" ) # top 10 variables based on the importance.
+```
+Models RF and GBM differ on the variables they use and the ranking of their importance. However, the most important 3 variables (roll_belt, pitch_forearm, and yaw_belt ) are the same in both models. 
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStop <- Sys.time()
+paste("GBM model time = ", TimerStop - TimerStart, attr( TimerStop - TimerStart,"units") )
+```
+The GBM method provides the best balance between computational time and accuracy.
+Now assemble all 3 models into 1.
+Build a new data set combining the 3 predictions from the 3 models above:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStart <- Sys.time()
+CombDataSetDF <- data.frame( predLDA, predRF, predGBM, classe = testing$classe ) # built with the testing model.
+```
+Now I will build a model that predicts classe based on the dataset assembled.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+fitControlComb <- trainControl( method = "cv", number = 5, allowParallel = TRUE ) # cross validation.
+```
+I will basically fit classe in the testing set against the 3 model predictions of it.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+modelCombFit <- train( classe ~., method = "rf", data = CombDataSetDF, trControl = fitControlComb ) # built with testing model.
+#print( modelCombFit$finalModel )
+#modelCombFit
+predComb <- predict( modelCombFit, newdata = CombDataSetDF ) # built with the testing data.
+cm <- confusionMatrix( predComb, testing$classe )
+cm$overall["Accuracy"]*100
+predCombDF <- as.data.frame( predict( modelCombFit, newdata = CombDataSetDF ) )
+#summary( predCombDF )
+```
+The overall accuracy on the testing set reported above is simply the number of correct predictions (on the testing set):
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TestCorrectPred <- sum( (testing$classe == predCombDF[,1]) )
+TestIncorrectPred <- sum( (testing$classe != predCombDF[,1]) )
+TestCorrectPred / ( TestCorrectPred + TestIncorrectPred )*100
+```
+This result is the same as the accuracy reported by the confusion matrix. A measure of the error would then be:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TestIncorrectPred / ( TestCorrectPred + TestIncorrectPred )*100
+```
+or simply:
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+( 1 - cm$overall["Accuracy"] )*100
+```
+I will use the latter in the rest of the paper.
+I will compute the out-of-sample error on the validation set, since the testing set was already used to build the model.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+CombDataSetDFV <- data.frame( predLDA = predLDAV, predRF = predRFV, predGBM = predGBMV ) # on the validation data.
+#print( modelCombFitV$finalModel )
+#modelCombFitV
+predCombV <- predict( modelCombFit, newdata = CombDataSetDFV ) # predict on the validation set.
+cm <- confusionMatrix( predCombV, validation$classe ) # confusionMatrix( prediction, actual )
+cm$overall["Accuracy"]*100
+cm
+predCombVDF <- as.data.frame( predict( modelCombFit, newdata = CombDataSetDFV ) )
+# summary( predCombVDF )
+```
+The out-of-sample error on the validation set is:
+```{r,  paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+( 1- cm$overall["Accuracy"] )*100
+TimerStop <- Sys.time()
+paste("Combined model time = ", TimerStop - TimerStart, attr( TimerStop - TimerStart,"units") )
+```
+The accuracy of the stacked model is 99.35% , at the expense of waiting ~12 mins for it. 
+Computationally, very time intensive, with only marginal improvements over and RF and GBM.
+
+FORECAST QUIZ RESULTS.-
+=======================
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStart <- Sys.time()
+# Predict the outcome classe on each of the three models: LDA, RF, GBM.
+predLDAQ <- predict( modelLDA, newdata = SubsetForecastDF )
+predRFQ <- predict( modelRF, newdata = SubsetForecastDF )
+predGBMQ <- predict( modelGBM, newdata = SubsetForecastDF )
+# Combine the predictions into one new data frame.
+ForecastQuizDF <- data.frame( predLDA = predLDAQ, predRF = predRFQ, predGBM = predGBMQ  )
+# Predict classe with the assembelled stacked model (built with the training and testing data, 
+# and validated with the validation data)
+predQuiz <- predict( modelCombFit, newdata = ForecastQuizDF )
+str( predQuiz )
+predQuiz
+```
+This prediction solves the Project quiz with 100% accuracy. We know that from the grader..:).. Now we know the answer to the quiz with 100% accuracy.
+
+What if we tried to predict with only GBM? How many right answers do we get ?
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+RightAnswer <- as.data.frame( predQuiz )
+cm <- confusionMatrix( as.data.frame( predGBMQ )[,1], RightAnswer[,1] ) # confusionMatrix( prediction, actual )
+cm$overall["Accuracy"]*100
+```
+Also perfect accuracy ! Hence, the GBM model alone should suffice to predict future outcomes.
+```{r, paged.print=TRUE, echo=TRUE,eval=TRUE, message=FALSE, warning=FALSE}
+
+TimerStop <- Sys.time()
+paste("Solving the quiz time => ", TimerStop - TimerStart, attr( TimerStop - TimerStart,"units") )
+
+stopCluster(cluster)
+registerDoSEQ()
+```
+                          -- THE END --
